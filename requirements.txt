@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+requests
+PyPDF2
+openpyxl
+python-pptx
+python-docx
+matplotlib
+python-multipart
+Pillow

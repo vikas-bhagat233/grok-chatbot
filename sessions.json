@@ -1,0 +1,41 @@
+{
+  "sessions": [
+    {
+      "id": "1765485718657",
+      "name": "Chat 1",
+      "messages": [
+        {
+          "sender": "bot",
+          "text": "How can i Assist you today",
+          "formatted": false
+        },
+        {
+          "sender": "user",
+          "text": "hi",
+          "formatted": false
+        },
+        {
+          "sender": "user",
+          "text": "hello",
+          "formatted": false
+        },
+        {
+          "sender": "user",
+          "text": "what is t shirt",
+          "formatted": false
+        },
+        {
+          "sender": "user",
+          "text": "hi",
+          "formatted": false
+        },
+        {
+          "sender": "user",
+          "text": "hi",
+          "formatted": false
+        }
+      ]
+    }
+  ],
+  "activeId": "1765485718657"
+}

@@ -1,0 +1,46 @@
+# Environment Variables and Secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+
+# Database
+chat.db
+*.db-journal
+
+# Uploads and Static Data
+static/uploads/
+uploads/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+# Keep the directory structure but ignore content (optional, usually done via .gitkeep)
+
+# Logs
+*.log
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS System Files
+.DS_Store
+Thumbs.db
+Desktop.ini
