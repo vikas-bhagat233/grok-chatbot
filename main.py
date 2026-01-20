@@ -79,9 +79,15 @@ GROQ_VISION_MODEL = "llama-3.2-11b-vision-preview" # Vision model
 
 # Standard System Prompt
 SYSTEM_PROMPT = """You are a helpful, smart assistant.
-- You can generate flowcharts, diagrams, and charts using Mermaid.js. Use strict markdown code blocks labeled `mermaid`.
-- For standard code, use strict markdown code blocks with the language name (e.g. `python`, `javascript`).
-- Be concise and accurate."""
+
+IMPORTANT OUTPUT RULES:
+- Do NOT include programming code, Mermaid diagrams, or long code blocks unless the user explicitly asks for code/diagram/chart.
+- If the user is asking a normal question (not coding), answer in plain English.
+- If the user asks for a diagram/chart/flowchart, then (and only then) include ONE valid Mermaid diagram in a fenced code block that starts with ```mermaid.
+- If the user asks for code, then (and only then) include the code in a fenced code block with the correct language (e.g., ```python).
+- If you are unsure whether the user wants code, ask a short clarification question instead of outputting code.
+
+Be concise and accurate."""
 
 # Simple in-memory store for uploaded content (demo purposes)
 DOC_STORE: list[dict] = []
@@ -531,7 +537,7 @@ async def analyze(files: List[UploadFile] = File(...), authorization: str | None
         payload = {
             "model": GROQ_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "system", "content": "You are a helpful assistant. Do NOT include code blocks or Mermaid diagrams unless the user explicitly asks for them."},
                 {"role": "user", "content": prompt},
             ],
         }
