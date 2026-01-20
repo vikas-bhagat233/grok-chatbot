@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Request
 from typing import List
@@ -8,7 +9,6 @@ from pydantic import BaseModel
 from dotenv import load_dotenv, dotenv_values
 import base64
 import matplotlib.pyplot as plt
-import json
 from pathlib import Path
 import sqlite3
 from datetime import datetime
@@ -129,50 +129,94 @@ def _init_db():
         )
     conn.close()
 
-def _get_active_id(conn: sqlite3.Connection) -> str | None:
-    cur = conn.execute("SELECT value FROM meta WHERE key='activeId'")
+def _normalize_owner_id(x_client_id: str | None) -> str:
+    """Derive a stable per-user owner id.
+
+    We prefer X-Client-Id from the frontend (stored in localStorage).
+    This keeps sessions isolated per browser/user even when the frontend is hosted
+    on a different origin (Netlify/Vercel) without relying on cookies.
+    """
+    if not x_client_id:
+        return "public"
+    x_client_id = x_client_id.strip()[:80]
+    # Only keep safe characters so we can safely use it in LIKE prefix patterns.
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", x_client_id)
+    return safe or "public"
+
+
+def _escape_like(value: str) -> str:
+    # Escape for SQLite LIKE with ESCAPE '\\'
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _session_prefix(owner_id: str) -> str:
+    return f"{owner_id}:"
+
+
+def _to_internal_session_id(owner_id: str, session_id: str | None) -> str | None:
+    if not session_id:
+        return None
+    return f"{_session_prefix(owner_id)}{session_id}"
+
+
+def _from_internal_session_id(owner_id: str, internal_id: str) -> str:
+    prefix = _session_prefix(owner_id)
+    return internal_id[len(prefix):] if internal_id.startswith(prefix) else internal_id
+
+
+def _get_active_id(conn: sqlite3.Connection, owner_id: str) -> str | None:
+    cur = conn.execute("SELECT value FROM meta WHERE key=?", (f"activeId:{owner_id}",))
     row = cur.fetchone()
     return row[0] if row else None
 
-def _set_active_id(conn: sqlite3.Connection, active_id: str | None):
+def _set_active_id(conn: sqlite3.Connection, owner_id: str, active_id: str | None):
+    key = f"activeId:{owner_id}"
     if active_id is None:
-        conn.execute("DELETE FROM meta WHERE key='activeId'")
+        conn.execute("DELETE FROM meta WHERE key=?", (key,))
     else:
         conn.execute(
-            "INSERT INTO meta(key, value) VALUES('activeId', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (active_id,),
+            "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, active_id),
         )
 
-def load_sessions_from_db():
+def load_sessions_from_db(owner_id: str):
     conn = _db_connect()
     try:
+        prefix = _session_prefix(owner_id)
+        like_pattern = _escape_like(prefix) + "%"
         sessions = []
-        for s in conn.execute("SELECT id, name, created_at FROM sessions ORDER BY datetime(created_at) ASC").fetchall():
+        for s in conn.execute(
+            "SELECT id, name, created_at FROM sessions WHERE id LIKE ? ESCAPE '\\' ORDER BY datetime(created_at) ASC",
+            (like_pattern,),
+        ).fetchall():
             msgs = conn.execute(
                 "SELECT sender, text, formatted FROM messages WHERE session_id=? ORDER BY id ASC",
                 (s[0],),
             ).fetchall()
             sessions.append(
                 {
-                    "id": s[0],
+                    "id": _from_internal_session_id(owner_id, s[0]),
                     "name": s[1],
                     "messages": [
                         {"sender": m[0], "text": m[1], "formatted": bool(m[2])} for m in msgs
                     ],
                 }
             )
-        active_id = _get_active_id(conn)
-        return {"sessions": sessions, "activeId": active_id}
+        active_id = _get_active_id(conn, owner_id)
+        return {"sessions": sessions, "activeId": _from_internal_session_id(owner_id, active_id) if active_id else None}
     finally:
         conn.close()
 
-def save_sessions_to_db(payload: dict):
+def save_sessions_to_db(payload: dict, owner_id: str):
     conn = _db_connect()
     with conn:
-        conn.execute("DELETE FROM messages")
-        conn.execute("DELETE FROM sessions")
+        prefix = _session_prefix(owner_id)
+        like_pattern = _escape_like(prefix) + "%"
+        conn.execute("DELETE FROM messages WHERE session_id LIKE ? ESCAPE '\\'", (like_pattern,))
+        conn.execute("DELETE FROM sessions WHERE id LIKE ? ESCAPE '\\'", (like_pattern,))
+
         for s in payload.get("sessions", []):
-            sid = s["id"]
+            sid = _to_internal_session_id(owner_id, s["id"])
             name = s.get("name", "Chat")
             conn.execute(
                 "INSERT INTO sessions(id, name, created_at) VALUES(?,?,?)",
@@ -183,13 +227,19 @@ def save_sessions_to_db(payload: dict):
                     "INSERT INTO messages(session_id, sender, text, formatted, ts) VALUES(?,?,?,?,?)",
                     (sid, m.get("sender", "bot"), m.get("text", ""), 1 if m.get("formatted") else 0, datetime.utcnow().isoformat()),
                 )
-        _set_active_id(conn, payload.get("activeId"))
+
+        _set_active_id(conn, owner_id, _to_internal_session_id(owner_id, payload.get("activeId")))
     conn.close()
 
-def _get_conversation_history(session_id: str, limit: int = 10):
+def _get_conversation_history(owner_id: str, session_id: str | None, limit: int = 10):
     """Fetch recent messages for context."""
     if not session_id:
         return []
+
+    internal_id = _to_internal_session_id(owner_id, session_id)
+    if not internal_id:
+        return []
+
     conn = _db_connect()
     try:
         # Get last N messages (excluding the one we just processed if any, but usually we call this before inserting the new one? 
@@ -205,7 +255,7 @@ def _get_conversation_history(session_id: str, limit: int = 10):
         # We want everything ordered by ID.
         rows = conn.execute(
             "SELECT sender, text FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?",
-            (session_id, limit)
+            (internal_id, limit)
         ).fetchall()
         
         history = []
@@ -253,15 +303,17 @@ class SessionsPayload(BaseModel):
     activeId: str | None
 
 @app.get("/sessions")
-def get_sessions():
-    return load_sessions_from_db()
+def get_sessions(x_client_id: str | None = Header(default=None)):
+    owner_id = _normalize_owner_id(x_client_id)
+    return load_sessions_from_db(owner_id)
 
 @app.post("/sessions")
-def set_sessions(payload: SessionsPayload):
+def set_sessions(payload: SessionsPayload, x_client_id: str | None = Header(default=None)):
+    owner_id = _normalize_owner_id(x_client_id)
     save_sessions_to_db({
         "sessions": [s.dict() for s in payload.sessions],
         "activeId": payload.activeId,
-    })
+    }, owner_id)
     return {"status": "ok"}
 
 
@@ -283,7 +335,7 @@ def health():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
+def chat(req: ChatRequest, authorization: str | None = Header(default=None), x_client_id: str | None = Header(default=None)):
     require_auth(authorization)
     """
     Take user message, send to Groq, return the model's reply.
@@ -296,7 +348,8 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
         # If session_id provided, fetch history
-        history = _get_conversation_history(req.session_id, limit=20)
+        owner_id = _normalize_owner_id(x_client_id)
+        history = _get_conversation_history(owner_id, req.session_id, limit=20)
         
         # De-duplicate: if the last message in history is exactly the same as req.message from 'user',
         # then we shouldn't append req.message again.

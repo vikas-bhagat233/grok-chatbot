@@ -705,6 +705,29 @@
     // Set API_BASE to your Render deployment URL
     const API_BASE = 'https://grok-chatbot-1flv.onrender.com';
 
+    // Per-user isolation: we generate a stable client id per browser (saved in localStorage)
+    // and send it to the backend via X-Client-Id. This makes /sessions private per user.
+    const CLIENT_ID_STORAGE_KEY = 'grok_chatbot_client_id';
+    function getOrCreateClientId() {
+      try {
+        const existing = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+        if (existing && existing.trim()) return existing.trim();
+        const id = (window.crypto && typeof window.crypto.randomUUID === 'function')
+          ? window.crypto.randomUUID()
+          : ('cid_' + Math.random().toString(16).slice(2) + Date.now().toString(16));
+        localStorage.setItem(CLIENT_ID_STORAGE_KEY, id);
+        return id;
+      } catch (e) {
+        // If localStorage is blocked, fall back to a per-page id (less ideal)
+        return 'cid_' + Math.random().toString(16).slice(2) + Date.now().toString(16);
+      }
+    }
+    const CLIENT_ID = getOrCreateClientId();
+
+    function withClientId(headers) {
+      return { ...(headers || {}), 'X-Client-Id': CLIENT_ID };
+    }
+
     // Surface JS/runtime errors in the chat so failures aren't silent.
     window.addEventListener('error', (event) => {
       try {
@@ -1045,7 +1068,7 @@
       try {
         await fetch(`${API_BASE}/sessions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withClientId({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ sessions, activeId })
         });
       } catch (e) {
@@ -1055,7 +1078,7 @@
 
     async function loadSessions() {
       try {
-        const res = await fetch(`${API_BASE}/sessions`);
+        const res = await fetch(`${API_BASE}/sessions`, { headers: withClientId() });
         const data = await readJsonSafe(res);
         if (!res.ok) throw new Error(formatServerError(res, data));
         if (data.sessions && data.sessions.length > 0) {
@@ -1170,7 +1193,7 @@ Bot: ${botText}
 Title:`;
         const res = await fetch(`${API_BASE}/chat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withClientId({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ message: prompt }) // don't pass session_id to avoid polluting context
         });
         const data = await readJsonSafe(res);
@@ -1205,7 +1228,7 @@ Title:`;
         const body = (askToggle && askToggle.checked) ? { question: text, session_id: activeId } : { message: text, session_id: activeId };
         const res = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withClientId({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(body),
         });
         // proceed without auth
@@ -1239,7 +1262,7 @@ Title:`;
 
     async function checkHealth() {
       try {
-        const res = await fetch(`${API_BASE}/health`);
+        const res = await fetch(`${API_BASE}/health`, { headers: withClientId() });
         const data = await readJsonSafe(res);
         if (!res.ok) throw new Error(formatServerError(res, data));
         if (data.status === 'ok') {
@@ -1362,7 +1385,7 @@ Title:`;
         showTyping(true);
         const res = await fetch(`${API_BASE}/image`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: withClientId({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ prompt: text }),
         });
 
@@ -1410,7 +1433,7 @@ Title:`;
         for (const img of imageFiles) {
           const formImg = new FormData();
           formImg.append('file', img);
-          const resImg = await fetch(`${API_BASE}/upload_image`, { method: 'POST', body: formImg });
+          const resImg = await fetch(`${API_BASE}/upload_image`, { method: 'POST', headers: withClientId(), body: formImg });
           const dataImg = await readJsonSafe(resImg);
           if (!resImg.ok) {
             addMessage(formatServerError(resImg, dataImg), 'bot');
@@ -1428,7 +1451,7 @@ Title:`;
           const form = new FormData();
           for (const f of otherFiles) form.append('files', f);
 
-          const res = await fetch(`${API_BASE}/analyze`, { method: 'POST', body: form });
+          const res = await fetch(`${API_BASE}/analyze`, { method: 'POST', headers: withClientId(), body: form });
           const data = await readJsonSafe(res);
           if (!res.ok) {
             addMessage(formatServerError(res, data), 'bot');
@@ -1480,7 +1503,7 @@ Title:`;
         for (const img of imageFiles) {
           const formImg = new FormData();
           formImg.append('file', img);
-          const resImg = await fetch(`${API_BASE}/upload_image`, { method: 'POST', body: formImg });
+          const resImg = await fetch(`${API_BASE}/upload_image`, { method: 'POST', headers: withClientId(), body: formImg });
           const dataImg = await readJsonSafe(resImg);
           if (!resImg.ok) { addMessage(formatServerError(resImg, dataImg), 'bot'); }
           else if (dataImg && dataImg.reply) addFormattedBotReply(dataImg.reply);
@@ -1489,7 +1512,7 @@ Title:`;
         if (otherFiles.length > 0) {
           const form = new FormData();
           for (const f of otherFiles) form.append('files', f);
-          const res = await fetch(`${API_BASE}/analyze`, { method: 'POST', body: form });
+          const res = await fetch(`${API_BASE}/analyze`, { method: 'POST', headers: withClientId(), body: form });
           const data = await readJsonSafe(res);
           if (!res.ok) { addMessage(formatServerError(res, data), 'bot'); return; }
           if (data && data.reply) addFormattedBotReply(data.reply);
